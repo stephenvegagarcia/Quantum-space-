@@ -40,7 +40,7 @@ def fetch_nasa_apod_image(api_key: str, timeout: int = DEFAULT_TIMEOUT) -> Image
     Returns a PIL.Image on success, or None on failure.
     """
     api_url = "https://api.nasa.gov/planetary/apod"
-    params = {"cQzgSEBIwJ9X86fc8z5yGziPyiSuEtFQa4mYp0fW": api_key}
+    params = {"api key here": api_key}
     try:
         logger.info("Requesting APOD metadata from NASA...")
         meta_resp = requests.get(api_url, params=params, timeout=timeout)
