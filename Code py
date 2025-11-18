@@ -1,0 +1,158 @@
+/usr/bin/env python3
+"""
+nasa_apod_qiskit_demo.py
+
+Fetch the NASA Astronomy Picture of the Day (APOD), validate it's an image,
+sample a few pixels to produce a small feature vector, and conceptually map
+that vector into a Qiskit ZZFeatureMap circuit for demonstration.
+
+Usage:
+  - Set your NASA API key in the environment variable NASA_API_KEY (optional).
+    If not set, the script will use "DEMO_KEY" which has strict rate limits.
+  - Run: python nasa_apod_qiskit_demo.py
+"""
+
+import os
+import logging
+import argparse
+from io import BytesIO
+
+import requests
+from PIL import Image
+import numpy as np
+
+# Qiskit imports (conceptual demo)
+from qiskit import QuantumCircuit
+from qiskit_machine_learning.circuit.library import ZZFeatureMap
+
+# --- Configuration / Defaults ---
+DEFAULT_SAVE_PATH = "nasa_apod_image.jpg"
+DEFAULT_TIMEOUT = 10  # seconds for HTTP requests
+DEMO_API_KEY = "DEMO_KEY"  # NASA's public demo key (rate-limited)
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
+
+
+def fetch_nasa_apod_image(api_key: str, timeout: int = DEFAULT_TIMEOUT) -> Image.Image | None:
+    """
+    Fetch the APOD metadata, ensure media_type == 'image', then download the image.
+    Returns a PIL.Image on success, or None on failure.
+    """
+    api_url = "https://api.nasa.gov/planetary/apod"
+    params = {"cQzgSEBIwJ9X86fc8z5yGziPyiSuEtFQa4mYp0fW": api_key}
+    try:
+        logger.info("Requesting APOD metadata from NASA...")
+        meta_resp = requests.get(api_url, params=params, timeout=timeout)
+        meta_resp.raise_for_status()
+        meta = meta_resp.json()
+
+        media_type = meta.get("media_type", "")
+        if media_type != "image":
+            logger.warning("APOD media_type is not 'image' (got: %s). URL: %s", media_type, meta.get("url"))
+            return None
+
+        # prefer hdurl if available
+        image_url = meta.get("hdurl") or meta.get("url")
+        if not image_url:
+            logger.warning("No image URL found in APOD metadata.")
+            return None
+
+        logger.info("Downloading image from: %s", image_url)
+        img_resp = requests.get(image_url, timeout=timeout)
+        img_resp.raise_for_status()
+
+        content_type = img_resp.headers.get("Content-Type", "")
+        if not content_type.startswith("image"):
+            logger.warning("Downloaded content is not an image. Content-Type: %s", content_type)
+            return None
+
+        return Image.open(BytesIO(img_resp.content)).convert("RGB")
+    except requests.exceptions.RequestException as exc:
+        logger.error("Network error while fetching APOD: %s", exc)
+        return None
+    except Exception as exc:
+        logger.exception("Unexpected error while fetching or opening APOD image: %s", exc)
+        return None
+
+
+def sample_image_for_features(img: Image.Image, n_features: int = 4) -> np.ndarray:
+    """
+    Convert the image to grayscale, downsample/resize to a small image that
+    contains at least n_features pixels, and return a 1D numpy array of the
+    first n_features normalized to [0, 1].
+    This keeps the quantum demo small and deterministic.
+    """
+    # Convert to grayscale for a single-channel feature vector
+    gray = img.convert("L")
+
+    # Choose a small square size that yields at least n_features pixels
+    side = int(np.ceil(np.sqrt(n_features)))
+    # Resize using a reasonable filter (ANTIALIAS) to create representative samples
+    small = gray.resize((side, side), resample=Image.LANCZOS)
+    arr = np.asarray(small).astype(np.float32).flatten()
+    # Normalize to [0, 1]
+    arr = arr / 255.0
+    if arr.size < n_features:
+        # pad with zeros (shouldn't happen due to side calculation, but keep safe)
+        arr = np.pad(arr, (0, max(0, n_features - arr.size)))
+    return arr[:n_features]
+
+
+def quantum_enhance_image_conceptual(feature_vector: np.ndarray) -> str:
+    """
+    Conceptual mapping of a small real-valued feature vector into a Qiskit ZZFeatureMap.
+    This does NOT perform actual image enhancement — it's an illustrative data encoding step.
+    """
+    if feature_vector.ndim != 1:
+        raise ValueError("feature_vector must be 1D")
+
+    feature_dim = int(feature_vector.size)
+    logger.info("Building a conceptual ZZFeatureMap with %d features.", feature_dim)
+
+    try:
+        # Create the feature map circuit (parameterized)
+        feature_map = ZZFeatureMap(feature_dimension=feature_dim, reps=2, entanglement="linear")
+
+        # Build a fresh circuit that includes the feature map
+        qc = QuantumCircuit(feature_dim)
+        qc.compose(feature_map, inplace=True)
+
+        # Prepare parameter binding dictionary: use the feature_map.parameters order
+        params = list(feature_map.parameters)  # ordered Parameter objects
+        if len(params) < feature_dim:
+            # fallback to qc.parameters if needed
+            params = list(qc.parameters)
+
+        # Ensure feature_vector are floats and in correct length
+        data_point = feature_vector.astype(float).tolist()
+
+        binding = {p: float(v) for p, v in zip(params, data_point)}
+        # Bind parameters to produce a concrete (non-parameterized) circuit
+        bound_circuit = qc.bind_parameters(binding)
+
+        logger.info("Successfully mapped sampled image data to a Qiskit circuit.")
+        # Return a textual depiction (could also use circuit_drawer, Matplotlib, etc.)
+        try:
+            textual_circuit = bound_circuit.draw(output="text")
+            logger.info("Conceptual Circuit Diagram (text):\n%s", textual_circuit)
+        except Exception:
+            textual_circuit = "<could not render circuit as text in this environment>"
+
+        return textual_circuit
+    except Exception as exc:
+        logger.exception("Error creating or binding feature map: %s", exc)
+        return "Processing Failed"
+
+
+def save_image(img: Image.Image, path: str) -> None:
+    try:
+        img.save(path)
+        logger.info("Image saved to %s", path)
+    except Exception as exc:
+        logger.error("Failed to save image: %s", exc)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="APOD -> conceptual Qiskit mapping demo")
+    parser.add_argument("--
